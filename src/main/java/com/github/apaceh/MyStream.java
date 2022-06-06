@@ -9,18 +9,19 @@ import com.google.gson.FieldNamingPolicy;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsBuilder;
-import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.kstream.*;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.json.JSONObject;
 
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 import java.util.Objects;
 import java.util.Properties;
@@ -87,43 +88,37 @@ public class MyStream {
     }
 
     public static void main(String[] args) {
-        final StreamsBuilder streamsBuilder = new StreamsBuilder();
-        final KStream<String, User> userKStream = getUserAsStream(streamsBuilder);
-        final KStream<String, UserLocation> userLocationKStream = getLocationAsStream(streamsBuilder);
-        final KGroupedStream<String, User> userKGroupedStream = userKStream.groupByKey(Grouped.with(Serdes.String(),
-                getSerde(new User())));
 
-        final KTable<String, User> ktUser = userKGroupedStream.aggregate(User::new, (k, v, a) -> v,
-                Materialized.<String, User, KeyValueStore<Bytes, byte[]>>as("aggregate-store")
-                        .withValueSerde(getSerde(new User())));
+        try (InputStream propertiesFile = new FileInputStream("/home/alfi/config/stream.properties")) {
 
-        final KStream<String, UserLocationJoin> userLocationJoinKStream = userLocationKStream.join(ktUser,
-                (location, user) -> UserLocationJoin.getInstance(user, location),
-                Joined.with(Serdes.String(), getSerde(new UserLocation()), getSerde(new User())));
+            Properties streamProperties = new Properties();
+            streamProperties.load(propertiesFile);
 
-        printStream(userLocationJoinKStream);
-        userLocationJoinKStream.to("users-data",  Produced.with(Serdes.String(), getSerde(new UserLocationJoin())));
+            final StreamsBuilder streamsBuilder = new StreamsBuilder();
+            final KStream<String, User> userKStream = getUserAsStream(streamsBuilder);
+            final KStream<String, UserLocation> userLocationKStream = getLocationAsStream(streamsBuilder);
+            final KGroupedStream<String, User> userKGroupedStream = userKStream.groupByKey(Grouped.with(Serdes.String(),
+                    getSerde(new User())));
 
-        final KafkaStreams streams = new KafkaStreams(streamsBuilder.build(), getStreamConfiguration());
+            final KTable<String, User> ktUser = userKGroupedStream.aggregate(User::new, (k, v, a) -> v,
+                    Materialized.<String, User, KeyValueStore<Bytes, byte[]>>as("aggregate-store")
+                            .withValueSerde(getSerde(new User())));
 
-        streams.cleanUp();
-        streams.start();
+            final KStream<String, UserLocationJoin> userLocationJoinKStream = userLocationKStream.join(ktUser,
+                    (location, user) -> UserLocationJoin.getInstance(user, location),
+                    Joined.with(Serdes.String(), getSerde(new UserLocation()), getSerde(new User())));
 
-        Runtime.getRuntime().addShutdownHook(new Thread(streams::close));
-    }
+            printStream(userLocationJoinKStream);
+            userLocationJoinKStream.to("users-data",  Produced.with(Serdes.String(), getSerde(new UserLocationJoin())));
 
-    static Properties getStreamConfiguration() {
-        final String bootstrapServers = "172.18.46.11:9092,172.18.46.12:9092,172.18.46.13:9092";
+            final KafkaStreams streams = new KafkaStreams(streamsBuilder.build(), streamProperties);
 
-        final Properties properties = new Properties();
-        properties.put(StreamsConfig.APPLICATION_ID_CONFIG, "full-user-data");
-        properties.put(StreamsConfig.CLIENT_ID_CONFIG, "full-user-data-client");
-        properties.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        properties.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
-        properties.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
-        properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        properties.put(StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, 0);
+            streams.cleanUp();
+            streams.start();
 
-        return properties;
+            Runtime.getRuntime().addShutdownHook(new Thread(streams::close));
+        } catch (IOException ex) {
+            ex.printStackTrace();
+        }
     }
 }
